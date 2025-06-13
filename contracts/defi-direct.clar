@@ -277,15 +277,22 @@
     )
 )
 
-(define-public (refund (tx-id (buff 32)))
+(define-public (refund (tx-id (buff 32)) (token-contract <sip010-trait>))
     (let ((tx (map-get? transactions tx-id)))
         (begin
             (asserts! (is-eq tx-sender (var-get owner)) err-not-owner)
-            (asserts! (is-some tx) (err u114))
-            (let ((txn (unwrap! tx (err u115))))
+            (asserts! (is-some tx) err-transaction-not-found)
+            (let ((txn (unwrap! tx err-transaction-data-error)))
                 (asserts! (not (get is-completed txn)) err-already-processed)
                 (asserts! (not (get is-refunded txn)) err-already-processed)
-                ;; NOTE: You must implement SIP-010 transfer logic here for real token transfer
+
+                (try! (contract-call? token-contract transfer 
+                    (get amount txn) 
+                    (as-contract (get user txn)) 
+                    (unwrap! (var-get vault-address) err-invalid-address) 
+                    none
+                ))
+
                 (map-set transactions tx-id (merge txn { is-refunded: true }))
                 (ok true)
             )
