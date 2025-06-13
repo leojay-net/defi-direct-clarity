@@ -1,18 +1,30 @@
 ;; title: defi-direct
 
 ;; traits
-(define-trait sip010-trait
-  (
-    (transfer (uint principal principal (optional principal)) (response bool uint))
-    (get-balance (principal) (response uint uint))
-    (get-decimals () (response uint uint))
-    (get-symbol () (response (string-ascii 32) uint))
-    (get-name () (response (string-ascii 32) uint))
-  )
-)
+(define-trait sip010-trait (
+    (transfer
+        (uint principal principal (optional principal))
+        (response bool uint)
+    )
+    (get-balance
+        (principal)
+        (response uint uint)
+    )
+    (get-decimals
+        ()
+        (response uint uint)
+    )
+    (get-symbol
+        ()
+        (response (string-ascii 32) uint)
+    )
+    (get-name
+        ()
+        (response (string-ascii 32) uint)
+    )
+))
 
-;; token definitions
-;; (none in this contract, but you can add SIP-010 tokens externally)
+;; (use-trait sip010 .sip010-trait)
 
 ;; constants
 (define-constant err-fee-too-high (err u100))
@@ -25,6 +37,15 @@
 (define-constant err-already-processed (err u107))
 (define-constant err-amount-mismatch (err u108))
 (define-constant err-insufficient-balance (err u109))
+(define-constant err-invalid-amount (err u110))
+(define-constant err-invalid-bank-account (err u111))
+(define-constant err-invalid-bank-name (err u112))
+(define-constant err-invalid-recipient-name (err u113))
+(define-constant err-transaction-not-found (err u114))
+(define-constant err-transaction-data-error (err u115))
+(define-constant err-list-too-long (err u116))
+(define-constant err-invalid-fiat-amount (err u117))
+(define-constant err-arithmetic-overflow (err u118))
 
 ;; fee constant
 (define-constant MAX-FEE u500)
@@ -38,9 +59,16 @@
 (define-data-var vault-address (optional principal) none)
 
 ;; data maps
-(define-map supported-tokens principal bool)
-(define-map collected-fees principal uint)
-(define-map transactions (buff 32) 
+(define-map supported-tokens
+    principal
+    bool
+)
+(define-map collected-fees
+    principal
+    uint
+)
+(define-map transactions
+    (buff 32)
     {
         user: principal,
         token: principal,
@@ -53,14 +81,22 @@
         recipient-name: (string-ascii 32),
         fiat-amount: uint,
         is-completed: bool,
-        is-refunded: bool
+        is-refunded: bool,
     }
 )
-(define-map user-transaction-ids principal (list 100 (buff 32)))
+(define-map user-transaction-ids
+    principal
+    (list 100 (buff 32))
+)
 
 ;; public functions
 
-(define-public (initializer (fee uint) (tx-manager principal) (fee-recv principal) (vault principal))
+(define-public (initializer
+        (fee uint)
+        (tx-manager principal)
+        (fee-recv principal)
+        (vault principal)
+    )
     (begin
         (asserts! (is-eq tx-sender (var-get owner)) err-not-owner)
         (asserts! (<= fee MAX-FEE) err-fee-too-high)
@@ -138,37 +174,43 @@
 )
 
 (define-public (initiate-fiat-transaction
-    (token principal)
-    (amount uint)
-    (fiat-bank-account-number uint)
-    (fiat-amount uint)
-    (fiat-bank (string-ascii 32))
-    (recipient-name (string-ascii 32))
-)
-    (let
-        (
+        (token-contract <sip010-trait>)
+        (amount uint)
+        (fiat-bank-account-number uint)
+        (fiat-amount uint)
+        (fiat-bank (string-ascii 32))
+        (recipient-name (string-ascii 32))
+    )
+    (let (
+            (token (contract-of token-contract))
             (is-supported (default-to false (map-get? supported-tokens token)))
             (fee (var-get spread-fee-percentage))
             (fee-amt (/ (* amount fee) u10000))
             (total-amt (+ amount fee-amt))
             (now stacks-block-height)
             (tx-id (sha256 (concat 
-                (unwrap-panic (to-consensus-buff? amount)) 
-                (unwrap-panic (to-consensus-buff? now))
+                (unwrap! (to-consensus-buff? amount) err-transaction-data-error)
+                (unwrap! (to-consensus-buff? now) err-transaction-data-error)
             )))
         )
-        (let ((transfer-result
-                (contract-call? (contract-of token)
-                    transfer
-                    amount
-                    tx-sender
-                    (as-contract tx-sender)
-                    none
-                )
-                ))
-            (asserts! (is-ok transfer-result) err-insufficient-balance)
-        )
+        (begin
+            ;; Validation 
+            (asserts! (not (var-get paused)) err-paused)
+            (asserts! (> amount u0) err-invalid-amount)
+            (asserts! (> fiat-bank-account-number u0) err-invalid-bank-account)
+            (asserts! (> fiat-amount u0) err-invalid-fiat-amount)
+            (asserts! (> (len fiat-bank) u0) err-invalid-bank-name)
+            (asserts! (> (len recipient-name) u0) err-invalid-recipient-name)
+            (asserts! is-supported err-token-not-supported)
+            
+            ;; Checking for arithmetic overflow
+            (asserts! (> total-amt amount) err-arithmetic-overflow)
 
+            (try! (contract-call? token-contract transfer total-amt tx-sender
+                (as-contract tx-sender) none
+            ))
+            
+            ;; Recording the transaction
             (map-set transactions tx-id {
                 user: tx-sender,
                 token: token,
@@ -181,32 +223,54 @@
                 recipient-name: recipient-name,
                 fiat-amount: fiat-amount,
                 is-completed: false,
-                is-refunded: false
+                is-refunded: false,
             })
+            ;; Update user transaction list
             (let ((existing-ids (default-to (list) (map-get? user-transaction-ids tx-sender))))
-                (map-set user-transaction-ids tx-sender (append existing-ids (list tx-id)))
+                (map-set user-transaction-ids tx-sender
+                    (unwrap! (as-max-len? (append existing-ids tx-id) u100)
+                        (err u116)
+                    ))
             )
             (ok tx-id)
         )
     )
 )
 
-(define-public (complete-transaction (tx-id (buff 32)) (amount-spent uint))
-    (let
-        (
-            (tx (map-get? transactions tx-id))
-            (tx-manager (var-get transaction-manager))
-        )
+(define-public (complete-transaction 
+    (token <sip010-trait>)  ;; Require trait reference
+    (tx-id (buff 32)) 
+    (amount-spent uint))
+    (let ((tx (map-get? transactions tx-id))
+          (tx-manager (var-get transaction-manager))
+    )
         (begin
             (asserts! (is-some tx-manager) err-not-tx-manager)
-            (asserts! (is-eq tx-sender (unwrap! tx-manager err-not-tx-manager)) err-not-tx-manager)
-            (asserts! (is-some tx) (err u114))
-            (let ((txn (unwrap! tx (err u115))))
+            (asserts! (is-eq tx-sender (unwrap! tx-manager err-not-tx-manager))
+                err-not-tx-manager
+            )
+            (asserts! (is-some tx) err-transaction-not-found)
+            (let ((txn (unwrap! tx err-transaction-data-error)))
                 (asserts! (not (get is-completed txn)) err-already-processed)
                 (asserts! (not (get is-refunded txn)) err-already-processed)
-                (asserts! (is-eq amount-spent (get amount txn)) err-amount-mismatch)
-                ;; NOTE: You must implement SIP-010 transfer logic here for real token transfer
-                (map-set transactions tx-id (merge txn {amount-spent: amount-spent, is-completed: true}))
+                (asserts! (is-eq amount-spent (get amount txn))
+                    err-amount-mismatch
+                )
+                ;; Verify the token matches stored principal
+                (asserts! (is-eq (contract-of token) (get token txn)) err-token-not-supported)
+                
+                (try! (contract-call? token transfer 
+                    (get transaction-fee txn) 
+                    (as-contract tx-sender) 
+                    (unwrap! (var-get fee-receiver) err-invalid-address) 
+                    none
+                ))
+                (map-set transactions tx-id
+                    (merge txn {
+                        amount-spent: amount-spent,
+                        is-completed: true,
+                    })
+                )
                 (ok true)
             )
         )
@@ -214,10 +278,7 @@
 )
 
 (define-public (refund (tx-id (buff 32)))
-    (let
-        (
-            (tx (map-get? transactions tx-id))
-        )
+    (let ((tx (map-get? transactions tx-id)))
         (begin
             (asserts! (is-eq tx-sender (var-get owner)) err-not-owner)
             (asserts! (is-some tx) (err u114))
@@ -225,7 +286,7 @@
                 (asserts! (not (get is-completed txn)) err-already-processed)
                 (asserts! (not (get is-refunded txn)) err-already-processed)
                 ;; NOTE: You must implement SIP-010 transfer logic here for real token transfer
-                (map-set transactions tx-id (merge txn {is-refunded: true}))
+                (map-set transactions tx-id (merge txn { is-refunded: true }))
                 (ok true)
             )
         )
@@ -259,3 +320,5 @@
 (define-read-only (is-paused)
     (var-get paused)
 )
+
+
