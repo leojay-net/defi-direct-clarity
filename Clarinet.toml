@@ -9,6 +9,8 @@ requirements = []
 path = 'contracts/defi-direct.clar'
 clarity_version = 3
 epoch = 3.1
+[contracts.mock-sip010]
+path = "contracts/mock-sip010.clar"
 [repl.analysis]
 passes = ['check_checker']
 

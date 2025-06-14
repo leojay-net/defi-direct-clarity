@@ -60,6 +60,14 @@ plan:
     - id: 0
       transactions:
         - emulated-contract-publish:
+            contract-name: mock-sip010
+            emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
+            path: contracts/mock-sip010.clar
+            clarity-version: 1
+      epoch: "2.1"
+    - id: 1
+      transactions:
+        - emulated-contract-publish:
             contract-name: defi-direct
             emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
             path: contracts/defi-direct.clar
