@@ -319,3 +319,10 @@
 (define-read-only (is-paused)
   (var-get paused)
 )
+
+(define-read-only (get-spread-fee-percentage)
+  (var-get spread-fee-percentage)
+)
+(define-read-only (get-owner)
+  (var-get owner)
+)
