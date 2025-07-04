@@ -24,6 +24,9 @@
   )
 ))
 
+(impl-trait 'ST1J4G6RR643BCG8G8SR6M2D9Z9KXT2NJDRK3FBTK.trait-sip-010.sip-010-trait)
+
+
 
 ;; constants
 (define-constant err-fee-too-high (err u100))

@@ -4,13 +4,18 @@ description = ''
 authors = []
 telemetry = true
 cache_dir = './.cache'
-requirements = []
+
+[[project.requirements]]
+contract_id = 'ST1J4G6RR643BCG8G8SR6M2D9Z9KXT2NJDRK3FBTK.trait-sip-010.sip-010-trait'
 [contracts.defi-direct]
 path = 'contracts/defi-direct.clar'
 clarity_version = 3
 epoch = 3.1
+
 [contracts.mock-sip010]
-path = "contracts/mock-sip010.clar"
+path = 'contracts/mock-sip010.clar'
+clarity_version = 1
+epoch = 2.05
 [repl.analysis]
 passes = ['check_checker']
 
